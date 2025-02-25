@@ -1,17 +1,19 @@
-import { useEffect, useState, useCallback } from "react";
-import { getChatRooms, getChatMessages, sendMessage, leaveChatRoom } from "@/lib/api/chatService";
+import { useUser } from "@/contexts/UserProvider";
+import { useCallback, useEffect, useState } from "react";
+import toast from "react-hot-toast";
+import { getChatMessages, getChatRooms, leaveChatRoom } from "@/lib/api/chatService";
+import { ChatRoomType, Message } from "@/types/chat";
+import { useSocket } from "@/hooks/useSocket";
 import ChatList from "@/components/Chat/ChatList";
 import ChatRoom from "@/components/Chat/ChatRoom";
-import socket from "@/lib/utils/socket";
-import { ChatRoomType, Message } from "@/types/chat";
-import { useUser } from "@/contexts/UserProvider";
-import toast from "react-hot-toast";
 
 export default function Chat() {
   const [chatRooms, setChatRooms] = useState<ChatRoomType[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<ChatRoomType | null>(null);
   const [messageList, setMessageList] = useState<Message[]>([]);
   const user = useUser();
+
+  const socket = useSocket();
 
   useEffect(() => {
     if (!user?.id) return;
@@ -41,7 +43,7 @@ export default function Chat() {
   }, [user?.id]);
 
   useEffect(() => {
-    if (!selectedRoom) return;
+    if (!selectedRoom || !socket) return;
 
     const fetchMessages = async () => {
       try {
@@ -55,42 +57,47 @@ export default function Chat() {
 
     fetchMessages();
     socket.emit("joinRoom", selectedRoom.roomId);
-    
+
     return () => {
       socket.emit("leaveRoom", selectedRoom.roomId);
     };
-  }, [selectedRoom]);
+  }, [selectedRoom, socket]);
 
   const handleNewMessage = useCallback((msg: Message) => {
     setMessageList((prevMessages) => [...prevMessages, msg]);
   }, []);
 
   useEffect(() => {
-    if (!selectedRoom) return;
+    if (!selectedRoom || !socket) return;
     socket.on("receiveMessage", handleNewMessage);
 
     return () => {
       socket.off("receiveMessage", handleNewMessage);
     };
-  }, [selectedRoom, handleNewMessage]);
+  }, [selectedRoom, handleNewMessage, socket]);
 
-  const handleSendMessage = async (message: string) => {
-    if (!selectedRoom || !user) return;
+  const handleSendMessage = useCallback(
+    async (message: string) => {
+      if (!selectedRoom || !user) {
+        console.log("selectedRoom 또는 user가 없음");
+        return;
+      }
 
-    const newMessage: Message = {
-      senderId: user.id,
-      message,
-      createdAt: new Date().toISOString(),
-    };
-    setMessageList((prev) => [...prev, newMessage]);
-    socket.emit("sendMessage", { roomId: selectedRoom.roomId, ...newMessage });
+      if (!socket?.connected) {
+        console.log("소켓 연결 상태:", socket?.connected);
+        return;
+      }
 
-    try {
-      await sendMessage(selectedRoom.roomId, message);
-    } catch (error) {
-      console.error(error);
-    }
-  };
+      const newMessage: Message = {
+        senderId: user.id,
+        message,
+        createdAt: new Date().toISOString(),
+      };
+
+      socket.emit("sendMessage", { roomId: selectedRoom.roomId, ...newMessage });
+    },
+    [socket, selectedRoom, user],
+  );
 
   const handleLeaveRoom = async () => {
     if (!selectedRoom) return;
@@ -107,7 +114,12 @@ export default function Chat() {
   return (
     <div className="flex h-[94.6vh]">
       <ChatList chatRooms={chatRooms} selectedRoom={selectedRoom} onSelectRoom={setSelectedRoom} />
-      <ChatRoom selectedRoom={selectedRoom} messageList={messageList} onSendMessage={handleSendMessage} onLeaveRoom={handleLeaveRoom} />
+      <ChatRoom
+        selectedRoom={selectedRoom}
+        messageList={messageList}
+        onSendMessage={handleSendMessage}
+        onLeaveRoom={handleLeaveRoom}
+      />
     </div>
   );
 }
